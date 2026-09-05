@@ -36,9 +36,15 @@ def load_features(path: str = DATA_PATH):
 
 def build_models() -> dict:
     return {
-        "Logistic Regression": LogisticRegression(max_iter=1000, random_state=RANDOM_STATE),
-        "Decision Tree": DecisionTreeClassifier(random_state=RANDOM_STATE),
-        "Random Forest": RandomForestClassifier(random_state=RANDOM_STATE),
+        "Logistic Regression": LogisticRegression(
+            max_iter=1000, random_state=RANDOM_STATE, class_weight="balanced"
+        ),
+        "Decision Tree": DecisionTreeClassifier(
+            random_state=RANDOM_STATE, class_weight="balanced"
+        ),
+        "Random Forest": RandomForestClassifier(
+            random_state=RANDOM_STATE, class_weight="balanced"
+        ),
     }
 
 
@@ -93,35 +99,53 @@ if __name__ == "__main__":
 #
 # Only ~6% of customers in this dataset churn, so a model that never predicts
 # churn at all still scores ~94% accuracy while being completely useless for
-# the business — Random Forest does exactly this above (94.2% accuracy, but
-# 0% recall: it flagged zero of the 29 churners in the test set). The real
-# cost asymmetry is: missing a customer who is about to churn (a false
-# negative) means losing them with no chance to intervene, while flagging a
-# loyal customer as at-risk (a false positive) just costs a wasted retention
-# offer/email. Since a missed churner is far more expensive than a wasted
-# outreach, recall on the churn class matters more than overall accuracy for
-# this use case.
+# the business — Random Forest does exactly this above even with balanced
+# class weights (93.98% accuracy, but 0% recall: it flagged zero of the 29
+# churners in the test set). The real cost asymmetry is: missing a customer
+# who is about to churn (a false negative) means losing them with no chance
+# to intervene, while flagging a loyal customer as at-risk (a false positive)
+# just costs a wasted retention offer/email. Since a missed churner is far
+# more expensive than a wasted outreach, recall on the churn class matters
+# more than overall accuracy for this use case.
+#
+# --- Effect of class_weight="balanced" (before -> after) -------------------
+#
+# Adding class_weight="balanced" to all three models had a very uneven
+# effect — it is not a fix that helps every model equally:
+# - Logistic Regression: recall jumped from 3.4% -> 48.3% (1 of 29 churners
+#   caught -> 14 of 29), because reweighting directly changes where its
+#   single linear boundary sits. The cost is a large drop in accuracy
+#   (94.4% -> 67.1%) and precision (100% -> 8.6%, 149 false positives) — it
+#   now over-flags heavily. F1 still improved (0.067 -> 0.146), making it
+#   the new best model by that metric.
+# - Decision Tree: barely changed and, on this split, got *worse* on the
+#   minority class (recall 10.3% -> 3.4%, F1 0.091 -> 0.036). Reweighting
+#   shifts split criteria but an unconstrained tree still ends up carving
+#   out whichever noisy leaf boundaries best fit the training data, which
+#   doesn't reliably translate into better minority-class splits on unseen
+#   data.
+# - Random Forest: no change at all (recall stayed at 0%). Averaging ~100
+#   trees over a ~6% minority class continues to wash out minority
+#   predictions even when each tree is fit on reweighted classes — majority
+#   voting still favors "no churn" almost everywhere in feature space.
+#
+# Takeaway: class_weight="balanced" is not a universal fix — it moved the
+# needle substantially for the linear model but did nothing (or slightly
+# hurt) for the tree-based models here. Resampling (e.g. SMOTE), threshold
+# tuning, or constraining tree depth would be more promising next steps for
+# the tree-based models specifically.
 #
 # --- Overfitting / bias-variance observations (actual run above) -----------
 #
-# - Decision Tree: 100% train accuracy vs. 88.0% test accuracy — a ~12-point
-#   gap, the clearest sign of overfitting here. An unconstrained tree
-#   memorized the training rows, including noise, then generalized poorly.
-#   It still ends up the "best" model by F1 (0.091) simply because it's the
-#   only one that catches more than one churner (3 of 29, recall 10.3%),
-#   at the cost of 34 false positives.
-# - Random Forest: also overfits train (99.9% vs. 94.2% test accuracy) but
-#   in a different way — despite averaging many trees, it converges to
-#   *always* predicting "no churn" on unseen data (0% recall). With a ~6%
-#   minority class and no class weighting, majority voting across trees
-#   washes out the minority-class splits entirely.
-# - Logistic Regression: the smallest train/test gap (94.1% vs. 94.4%,
-#   essentially identical) — low variance, but high bias toward the
-#   majority class: it only catches 1 of 29 churners (recall 3.4%), since a
-#   single linear boundary through 40+ features can't carve out the
-#   minority region well.
-#
-# None of the three models were given class weighting to compensate for the
-# ~6% churn rate, which is the main reason recall is low across the board.
-# class_weight="balanced" or resampling (e.g. SMOTE) would be the natural
-# next step to raise recall without changing the feature set.
+# - Decision Tree: 100% train accuracy vs. 89.4% test accuracy — still the
+#   clearest overfit here (unconstrained tree memorizes training rows,
+#   including noise, then generalizes poorly), unchanged by class weighting.
+# - Random Forest: also fully overfits train (100% vs. 94.0% test accuracy),
+#   same pattern as before class weighting — ensembling reduces the training
+#   memorization symptom somewhat but does not fix the recall collapse.
+# - Logistic Regression: still the smallest train/test gap (66.8% vs. 67.1%,
+#   virtually identical) — low variance either way. What changed is *where*
+#   its bias points: unweighted it was biased toward the majority class
+#   (barely predicting churn at all); balanced it's now biased toward
+#   over-predicting churn instead. Same low-variance model, very different
+#   operating point.
