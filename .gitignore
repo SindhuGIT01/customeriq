@@ -19,6 +19,9 @@ dist/
 data/raw/
 data/processed/
 
+# Trained model artifacts (root-level only; src/models/ is source code)
+/models/
+
 # Environment variables
 .env
 
