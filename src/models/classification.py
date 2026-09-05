@@ -91,11 +91,21 @@ def main():
     best_model = fitted_models[best_model_name]
     print(f"\nBest model by F1: {best_model_name}")
 
+    # Sign of each feature's correlation with churn, used by explainability
+    # for tree-based models (feature_importances_ has no sign of its own).
+    feature_directions = {col: (1.0 if X[col].corr(y) >= 0 else -1.0) for col in X.columns}
+
     os.makedirs(MODELS_DIR, exist_ok=True)
     # Bundle the model with the encoder/scaler it was trained against, so a
     # caller (e.g. the prediction API) can transform new raw input the same
     # way without needing to refit anything.
-    joblib.dump({"model": best_model, "encoder": encoder, "scaler": scaler}, MODEL_PATH)
+    joblib.dump(
+        {
+            "model": best_model, "encoder": encoder, "scaler": scaler,
+            "feature_directions": feature_directions,
+        },
+        MODEL_PATH,
+    )
     print(f"Saved best model to {MODEL_PATH}")
 
     save_metrics_json(
