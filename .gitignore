@@ -32,6 +32,10 @@ data/processed/
 # Jupyter
 .ipynb_checkpoints/
 
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+
 # OS
 .DS_Store
 Thumbs.db

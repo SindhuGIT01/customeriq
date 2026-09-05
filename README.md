@@ -109,6 +109,17 @@ python -m pytest
 ruff check .
 ```
 
+Standalone analysis utilities (not required for the API, but runnable
+on their own):
+
+```bash
+python -m src.evaluation.statistics_dashboard   # print the stats dashboard as JSON
+python -m src.evaluation.ab_testing             # simulate + evaluate a retention-campaign A/B test
+```
+
+A 2-3 minute demo walkthrough (upload -> predict -> segment -> explain) is
+in [DEMO.md](DEMO.md).
+
 ## API Reference
 
 All examples below are real request/response pairs captured from a running
@@ -275,3 +286,84 @@ avg. tenure, 0.6% churn), **Low-Value** (1,439 customers, the majority,
 below-average CLV), **New Customer** (176 customers, ~1 month tenure), and
 **High-Value At-Risk** (376 customers — the highest spenders, but churning
 at 9%, the same elevated rate as brand-new customers).
+
+## Interview Talking Points
+
+**Why churn as the classification target?** Churn is the highest-leverage
+prediction for a subscription business: acquiring a replacement customer
+costs far more than retaining an existing one, and — unlike CLV or
+segmentation, which are descriptive — a churn probability is directly
+actionable *today* (trigger a retention offer, escalate to a success
+manager). CLV and segmentation are complementary lenses on the same
+customers, but churn is the one binary decision variable retention
+operations actually run on, which is why `src/evaluation/ab_testing.py`
+simulates testing a retention campaign against it specifically.
+
+**Why recall matters more than accuracy here.** Churn is ~6% of the
+dataset, so a model that never predicts churn scores ~94% accuracy while
+being useless — Random Forest does exactly this in our results table (94%
+accuracy, 0% recall). The cost is asymmetric: a missed churner (false
+negative) is a lost customer with zero chance to intervene; a false
+positive just costs a wasted retention email. Since a miss is far more
+expensive than a wasted outreach, we optimized model selection for F1
+(which rewards recall) rather than accuracy, and picked Logistic
+Regression with `class_weight="balanced"` specifically because it lifted
+recall from 3.4% to 48.3%.
+
+**How missing values and outliers were handled.** Every column got a
+deliberate, commented-in-code strategy in `src/data/cleaning.py` rather
+than a blanket `fillna(0)`: median for skewed continuous features (robust
+to the long tail), `total_spend` reconstructed from `tenure_months *
+monthly_spend` when missing (a domain formula beats a statistical guess),
+0 for missing `support_tickets` (absence almost certainly means no ticket
+was ever logged, not a random gap), mode for categoricals, and rows with a
+missing `churn` target are dropped outright — imputing the label you're
+trying to predict would inject fabricated ground truth. Outliers in
+`monthly_spend`/`tenure_months` are flagged via IQR into boolean columns
+and *capped* rather than dropped, so a handful of Enterprise-tier accounts
+don't get discarded, just prevented from dominating the scale.
+
+**Which engineered features mattered most.** In the trained Logistic
+Regression's coefficients, `total_spend` and `tenure_months` are the
+strongest *protective* signals (large negative coefficients), while
+`customer_lifetime_value` carries the single largest *risk* coefficient —
+worth flagging honestly rather than at face value, since it's somewhat
+counterintuitive and likely reflects an interaction with the balanced
+class weighting rather than a clean causal story; it's exactly the kind of
+result that's worth cross-checking against SHAP (which is why `/explain`
+runs both) before trusting a coefficient blindly. The *engineered* ratio
+features earned their place too: `average_monthly_spend` and
+`usage_per_month` normalize out subscription-tier size effects that make
+the raw totals noisier, and `support_ticket_rate` was consistently one of
+the clearest churn signals across both the EDA correlation analysis
+(Task 2) and the trained model.
+
+**How K was chosen for K-Means.** Rather than eyeballing an elbow plot, we
+implemented a geometric elbow-detection heuristic: normalize the
+inertia-vs-K curve to [0,1] on both axes, then pick the K with the maximum
+perpendicular distance from the straight line connecting the first and
+last points (K=1 and K=10). That landed on K=4, which we then validated
+qualitatively, not just numerically — the 4 clusters mapped cleanly onto
+four distinct, actionable business segments (High-Value Loyal, Low-Value,
+New Customer, High-Value At-Risk) rather than producing overlapping or
+redundant groups, which is the real test of whether a chosen K "makes
+sense."
+
+**How this would be deployed and monitored for drift in production.** The
+service is already container-ready as-is (FastAPI + joblib bundles, no
+in-memory-only state that can't be externalized) — the main production
+change is swapping local file paths for object storage (S3/GCS) so model
+bundles and the processed dataset survive container restarts, and putting
+it behind a load balancer with the `/train` endpoint restricted to an
+internal/admin role rather than public. For drift monitoring: (1) track
+the distribution of incoming `/predict` feature values against the
+training snapshot (e.g. population stability index or a KS-test per
+feature) to catch input drift before it silently degrades predictions; (2)
+track the rolling proportion of "High Risk" predictions over time as a
+cheap early-warning signal — a sudden jump usually means either a real
+shift in customer behavior or a broken upstream data feed; (3) since churn
+outcomes arrive with a natural lag (a customer either does or doesn't
+churn within some window), join realized outcomes back to past predictions
+to compute rolling precision/recall/F1 and trigger retraining through
+`/train` once performance drops past a threshold, rather than retraining
+on a fixed schedule regardless of whether it's needed.
