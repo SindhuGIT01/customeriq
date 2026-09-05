@@ -74,7 +74,10 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
 
     # discount_used: conservative default is "no discount" when unrecorded,
     # since discounts are opt-in and absence of a record implies none applied.
-    df["discount_used"] = df["discount_used"].fillna(False)
+    # NaN can't live in a true bool dtype column, which is why the earlier
+    # map() left this as object dtype — cast for real only now that every
+    # value is filled.
+    df["discount_used"] = df["discount_used"].fillna(False).astype(bool)
 
     # churn: this is the prediction target. Imputing it would inject fake
     # labels into the training signal, so rows with an unknown outcome are

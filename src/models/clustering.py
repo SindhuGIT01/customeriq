@@ -73,7 +73,7 @@ def choose_elbow_k(k_values, inertias) -> int:
     line_vec_norm = line_vec / np.linalg.norm(line_vec)
 
     distances = []
-    for x, y in zip(k_norm, inertia_norm):
+    for x, y in zip(k_norm, inertia_norm, strict=True):
         point_vec = np.array([x, y]) - p1
         proj_len = np.dot(point_vec, line_vec_norm)
         proj_point = p1 + proj_len * line_vec_norm
