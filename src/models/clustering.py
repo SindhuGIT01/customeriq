@@ -7,6 +7,7 @@ and exports the labeled dataset.
 
 import os
 
+import joblib
 import matplotlib
 
 matplotlib.use("Agg")
@@ -17,10 +18,14 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
+from src.evaluation.metrics import save_metrics_json
 from src.features.engineering import engineer_features
 
 DATA_PATH = "data/processed/customers_clean.csv"
 OUTPUT_PATH = "data/processed/customers_segmented.csv"
+MODELS_DIR = "models"
+MODEL_PATH = os.path.join(MODELS_DIR, "clustering_model.joblib")
+METRICS_PATH = os.path.join(MODELS_DIR, "clustering_profile.json")
 REPORTS_DIR = "reports"
 RANDOM_STATE = 42
 
@@ -32,13 +37,14 @@ K_CANDIDATES = range(1, 11)
 
 
 def load_cluster_data(path: str = DATA_PATH):
-    """Load cleaned data, engineer features, and return the full df plus the
-    scaled matrix used for clustering."""
+    """Load cleaned data, engineer features, and return the full df, the
+    scaled matrix used for clustering, and the fitted scaler (so a caller
+    can transform a new customer's features the same way later)."""
     df = pd.read_csv(path)
     df = engineer_features(df)
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(df[CLUSTER_FEATURES])
-    return df, X_scaled
+    return df, X_scaled, scaler
 
 
 def compute_inertias(X_scaled, k_values=K_CANDIDATES) -> list:
@@ -156,7 +162,7 @@ def plot_clusters_pca(X_scaled, cluster_labels, segment_labels, output_path: str
 
 
 def main():
-    df, X_scaled = load_cluster_data()
+    df, X_scaled, scaler = load_cluster_data()
 
     k_values = list(K_CANDIDATES)
     inertias = compute_inertias(X_scaled, k_values)
@@ -183,6 +189,22 @@ def main():
 
     df.to_csv(OUTPUT_PATH, index=False)
     print(f"Saved segmented dataset to {OUTPUT_PATH}")
+
+    os.makedirs(MODELS_DIR, exist_ok=True)
+    # Bundle the fitted KMeans with the scaler and the cluster -> business
+    # label mapping, so a caller (e.g. the API) can segment a brand-new
+    # customer without needing to re-run the whole clustering pipeline.
+    joblib.dump(
+        {"kmeans": kmeans, "scaler": scaler, "segment_labels": profile["segment_label"].to_dict()},
+        MODEL_PATH,
+    )
+    print(f"Saved clustering model to {MODEL_PATH}")
+
+    save_metrics_json(
+        {"chosen_k": chosen_k, "profile": profile.reset_index().to_dict(orient="records")},
+        METRICS_PATH,
+    )
+    print(f"Saved cluster profile to {METRICS_PATH}")
 
     return profile
 

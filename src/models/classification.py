@@ -14,24 +14,31 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeClassifier
 
-from src.evaluation.metrics import evaluate_classifier
+from src.evaluation.metrics import evaluate_classifier, save_metrics_json
 from src.features.engineering import encode_and_scale, engineer_features
 
 DATA_PATH = "data/processed/customers_clean.csv"
 MODELS_DIR = "models"
+MODEL_PATH = os.path.join(MODELS_DIR, "best_churn_model.joblib")
+METRICS_PATH = os.path.join(MODELS_DIR, "classification_metrics.json")
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
 NON_FEATURE_COLUMNS = ["customer_id", "churn"]
 
 
 def load_features(path: str = DATA_PATH):
-    """Load cleaned data and turn it into a model-ready feature matrix."""
+    """Load cleaned data and turn it into a model-ready feature matrix.
+
+    Returns the fitted encoder/scaler too so callers (e.g. the API, which
+    needs to transform a single new customer the same way at prediction
+    time) can persist and reuse them instead of refitting.
+    """
     df = pd.read_csv(path)
     df = engineer_features(df)
-    transformed, _encoder, _scaler = encode_and_scale(df)
+    transformed, encoder, scaler = encode_and_scale(df)
     X = transformed.drop(columns=NON_FEATURE_COLUMNS)
     y = transformed["churn"].astype(int)
-    return X, y
+    return X, y, encoder, scaler
 
 
 def build_models() -> dict:
@@ -49,7 +56,7 @@ def build_models() -> dict:
 
 
 def main():
-    X, y = load_features()
+    X, y, encoder, scaler = load_features()
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=TEST_SIZE, stratify=y, random_state=RANDOM_STATE
     )
@@ -85,9 +92,17 @@ def main():
     print(f"\nBest model by F1: {best_model_name}")
 
     os.makedirs(MODELS_DIR, exist_ok=True)
-    model_path = os.path.join(MODELS_DIR, "best_churn_model.joblib")
-    joblib.dump(best_model, model_path)
-    print(f"Saved best model to {model_path}")
+    # Bundle the model with the encoder/scaler it was trained against, so a
+    # caller (e.g. the prediction API) can transform new raw input the same
+    # way without needing to refit anything.
+    joblib.dump({"model": best_model, "encoder": encoder, "scaler": scaler}, MODEL_PATH)
+    print(f"Saved best model to {MODEL_PATH}")
+
+    save_metrics_json(
+        {"best_model": best_model_name, "metrics": comparison.reset_index().to_dict(orient="records")},
+        METRICS_PATH,
+    )
+    print(f"Saved metrics to {METRICS_PATH}")
 
     return comparison
 

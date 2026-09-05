@@ -19,10 +19,13 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 
+from src.evaluation.metrics import save_metrics_json
 from src.features.engineering import engineer_features
 
 DATA_PATH = "data/processed/customers_clean.csv"
 MODELS_DIR = "models"
+MODEL_PATH = os.path.join(MODELS_DIR, "best_clv_model.joblib")
+METRICS_PATH = os.path.join(MODELS_DIR, "regression_metrics.json")
 REPORTS_DIR = "reports"
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
@@ -101,9 +104,17 @@ def main():
     print(f"\nBest model by R2: {best_model_name}")
 
     os.makedirs(MODELS_DIR, exist_ok=True)
-    model_path = os.path.join(MODELS_DIR, "best_clv_model.joblib")
-    joblib.dump(best_model, model_path)
-    print(f"Saved best model to {model_path}")
+    # Bundle the model with its trained feature-column order, so a caller
+    # (e.g. the API) can one-hot encode new input and reindex to match
+    # exactly, filling any columns the new data didn't produce with 0.
+    joblib.dump({"model": best_model, "feature_columns": list(X.columns)}, MODEL_PATH)
+    print(f"Saved best model to {MODEL_PATH}")
+
+    save_metrics_json(
+        {"best_model": best_model_name, "metrics": comparison.reset_index().to_dict(orient="records")},
+        METRICS_PATH,
+    )
+    print(f"Saved metrics to {METRICS_PATH}")
 
     os.makedirs(REPORTS_DIR, exist_ok=True)
     plot_path = os.path.join(REPORTS_DIR, "clv_predicted_vs_actual.png")
